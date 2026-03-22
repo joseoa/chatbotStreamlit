@@ -42,7 +42,7 @@ def match_intent(user_input):
 # -----------------------
 # STREAMLIT UI
 # -----------------------
-st.title("Chatbot IA 🤖")
+st.title("Chatbot IA ")
 
 if "history" not in st.session_state:
     st.session_state.history = []
