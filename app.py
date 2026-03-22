@@ -1,72 +1,163 @@
 import streamlit as st
+import pandas as pd
+import os
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-# -----------------------
-# INTENCIONES
-# -----------------------
-intents = {
-    "saludo": {
-        "patterns": ["hola", "buenos días", "hi"],
-        "responses": ["Hola, ¿en qué puedo ayudarte?"]
-    },
-    "despedida": {
-        "patterns": ["adiós", "bye"],
-        "responses": ["Hasta luego, que tengas un buen día"]
-    },
-    "horario": {
-        "patterns": ["horario", "horas", "abren"],
-        "responses": ["Nuestro horario es de 9am a 6pm"]
-    },
-    "servicios": {
-        "patterns": ["servicios", "qué hacen"],
-        "responses": ["Ofrecemos soporte técnico y desarrollo de software"]
-    },
-    "ubicacion": {
-        "patterns": ["dónde están", "ubicación"],
-        "responses": ["Estamos ubicados en Monterrey, México"]
-    }
+# -----------------------------
+# CONFIG
+# -----------------------------
+DATA_PATH = "training_data.csv"
+
+# -----------------------------
+# DATASET INICIAL
+# -----------------------------
+def init_data():
+    if not os.path.exists(DATA_PATH):
+        data = pd.DataFrame({
+            "text": [
+                "hola", "buenos dias", "hi",
+                "adios", "bye",
+                "horario", "horas de atencion",
+                "servicios", "que hacen",
+                "donde estan", "ubicacion"
+            ],
+            "intent": [
+                "saludo","saludo","saludo",
+                "despedida","despedida",
+                "horario","horario",
+                "servicios","servicios",
+                "ubicacion","ubicacion"
+            ]
+        })
+        data.to_csv(DATA_PATH, index=False)
+
+# -----------------------------
+# RESPUESTAS
+# -----------------------------
+responses = {
+    "saludo": "Hola, ¿en qué puedo ayudarte?",
+    "despedida": "Hasta luego",
+    "horario": "Nuestro horario es de 9am a 6pm",
+    "servicios": "Ofrecemos desarrollo de software e IA",
+    "ubicacion": "Estamos en Monterrey, México",
+    "fallback": "No entendí tu pregunta"
 }
 
-fallback_response = "Lo siento, no entendí tu pregunta. ¿Puedes reformularla?"
+# -----------------------------
+# ENTRENAR MODELO
+# -----------------------------
+def train_model():
+    df = pd.read_csv(DATA_PATH)
 
-# -----------------------
-# FUNCIONES NLP
-# -----------------------
-def match_intent(user_input):
-    user_input = user_input.lower()
-    for intent, data in intents.items():
-        for pattern in data["patterns"]:
-            if pattern in user_input:
-                return intent
-    return "fallback"
+    vectorizer = TfidfVectorizer()
+    X = vectorizer.fit_transform(df["text"])
 
-# -----------------------
-# STREAMLIT UI
-# -----------------------
-st.title("Chatbot IA ")
+    return vectorizer, X, df
 
+# -----------------------------
+# PREDECIR INTENCION
+# -----------------------------
+def predict_intent(user_input, vectorizer, X, df):
+    user_vec = vectorizer.transform([user_input])
+
+    similarity = cosine_similarity(user_vec, X)
+    best_score = similarity.max()
+    best_index = similarity.argmax()
+
+    if best_score < 0.3:
+        return "fallback", best_score
+
+    return df.iloc[best_index]["intent"], best_score
+
+# -----------------------------
+# AGREGAR NUEVO EJEMPLO
+# -----------------------------
+def learn_new_example(text, intent):
+    df = pd.read_csv(DATA_PATH)
+
+    new_row = pd.DataFrame({
+        "text": [text],
+        "intent": [intent]
+    })
+
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(DATA_PATH, index=False)
+
+# -----------------------------
+# UI STREAMLIT
+# -----------------------------
+st.title("Chatbot con Machine Learning")
+
+init_data()
+
+# Estado
 if "history" not in st.session_state:
     st.session_state.history = []
 
-user_input = st.text_input("Escribe tu mensaje:")
+if "user_input" not in st.session_state:
+    st.session_state.user_input = ""
 
-if st.button("Enviar"):
-    intent = match_intent(user_input)
+if "last_input" not in st.session_state:
+    st.session_state.last_input = ""
 
-    if intent != "fallback":
-        response = intents[intent]["responses"][0]
-    else:
-        response = fallback_response
+if "last_intent" not in st.session_state:
+    st.session_state.last_intent = ""
+
+# Entrenar modelo
+vectorizer, X, df = train_model()
+
+# -----------------------------
+# FUNCION ENVIAR
+# -----------------------------
+def enviar():
+    user_input = st.session_state.user_input
+
+    intent, score = predict_intent(user_input, vectorizer, X, df)
+
+    response = responses.get(intent, responses["fallback"])
 
     st.session_state.history.append(("Usuario", user_input))
-    st.session_state.history.append(("Bot", response))
+    st.session_state.history.append(("Bot", f"{response} (confianza: {score:.2f})"))
 
-# Mostrar historial
+    st.session_state.last_input = user_input
+    st.session_state.last_intent = intent
+
+    # limpiar input
+    st.session_state.user_input = ""
+
+# -----------------------------
+# INPUT
+# -----------------------------
+st.text_input("Escribe tu mensaje:", key="user_input")
+st.button("Enviar", on_click=enviar)
+
+# -----------------------------
+# HISTORIAL
+# -----------------------------
+st.subheader("Conversación")
 for speaker, msg in st.session_state.history:
     st.write(f"**{speaker}:** {msg}")
 
-# Evaluación
+# -----------------------------
+# FEEDBACK
+# -----------------------------
 st.subheader("Evaluación")
-rating = st.slider("¿Qué tan útil fue la respuesta?", 1, 5)
 
-if st.button("Enviar evaluación"):
-    st.success("Gracias por tu feedback")
+rating = st.slider("¿La respuesta fue útil?", 1, 5)
+
+correct_intent = st.selectbox(
+    "¿Cuál era la intención correcta?",
+    ["saludo", "despedida", "horario", "servicios", "ubicacion"]
+)
+
+if st.button("Enviar feedback"):
+
+    if rating <= 2:
+        st.warning("Aprendiendo de este error...")
+
+        # aprender nuevo patrón
+        learn_new_example(st.session_state.last_input, correct_intent)
+
+    else:
+        st.success("Gracias por tu feedback")
